@@ -58,6 +58,7 @@ class MainActivity : AppCompatActivity() {
         loadPreferences()
         setupListeners()
         requestNotificationPermission()
+        checkExactAlarmPermission()
     }
 
     override fun onResume() {
@@ -154,12 +155,25 @@ class MainActivity : AppCompatActivity() {
 
         switchSchedule.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("schedule_enabled", isChecked).apply()
-            if (isChecked) scheduleAlarms()
+            if (isChecked) {
+                switchSolar.isChecked = false
+                prefs.edit().putBoolean("solar_enabled", false).apply()
+                scheduleAlarms()
+                Toast.makeText(this, "Schedule activated", Toast.LENGTH_SHORT).show()
+            } else {
+                if (!switchSolar.isChecked) cancelAlarms()
+            }
         }
 
         switchSolar.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("solar_enabled", isChecked).apply()
-            if (isChecked) checkLocationAndSyncSolar()
+            if (isChecked) {
+                switchSchedule.isChecked = false
+                prefs.edit().putBoolean("schedule_enabled", false).apply()
+                checkLocationAndSyncSolar()
+            } else {
+                if (!switchSchedule.isChecked) cancelAlarms()
+            }
         }
 
         btnSyncSolar.setOnClickListener { checkLocationAndSyncSolar() }
@@ -167,6 +181,18 @@ class MainActivity : AppCompatActivity() {
         tvFooterBranding.setOnClickListener {
             val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://itwebsolutions.ca"))
             startActivity(browserIntent)
+        }
+    }
+
+    private fun checkExactAlarmPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            if (!alarmManager.canScheduleExactAlarms()) {
+                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            }
         }
     }
 
@@ -195,7 +221,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startOverlayService() {
-        val intent = Intent(this, OverlayService::class.java)
+        val intent = Intent(this, OverlayService::class.java).apply {
+            action = OverlayService.ACTION_SET_OPACITY
+            putExtra(OverlayService.EXTRA_OPACITY, prefs.getInt("opacity", 40))
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {
@@ -205,7 +234,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopOverlayService() {
-        stopService(Intent(this, OverlayService::class.java))
+        val intent = Intent(this, OverlayService::class.java).apply {
+            action = OverlayService.ACTION_STOP_SERVICE
+        }
+        stopService(intent)
         prefs.edit().putBoolean("is_active", false).apply()
     }
 
@@ -228,29 +260,61 @@ class MainActivity : AppCompatActivity() {
 
     private fun scheduleAlarms() {
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val now = Calendar.getInstance()
 
         val startCal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, prefs.getInt("start_hour", 22))
             set(Calendar.MINUTE, prefs.getInt("start_min", 0))
             set(Calendar.SECOND, 0)
-            if (before(Calendar.getInstance())) add(Calendar.DATE, 1)
+            set(Calendar.MILLISECOND, 0)
+            if (before(now)) add(Calendar.DATE, 1)
         }
 
         val endCal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, prefs.getInt("end_hour", 6))
             set(Calendar.MINUTE, prefs.getInt("end_min", 0))
             set(Calendar.SECOND, 0)
-            if (before(Calendar.getInstance())) add(Calendar.DATE, 1)
+            set(Calendar.MILLISECOND, 0)
+            if (before(now)) add(Calendar.DATE, 1)
         }
 
-        val onIntent = Intent(this, ScheduleReceiver::class.java).apply { action = ScheduleReceiver.ACTION_ON }
-        val offIntent = Intent(this, ScheduleReceiver::class.java).apply { action = ScheduleReceiver.ACTION_OFF }
+        val onIntent = Intent(this, ScheduleReceiver::class.java).apply {
+            action = ScheduleReceiver.ACTION_ON
+            setPackage(packageName)
+        }
+        val offIntent = Intent(this, ScheduleReceiver::class.java).apply {
+            action = ScheduleReceiver.ACTION_OFF
+            setPackage(packageName)
+        }
 
         val pOn = PendingIntent.getBroadcast(this, 101, onIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val pOff = PendingIntent.getBroadcast(this, 102, offIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, startCal.timeInMillis, pOn)
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, endCal.timeInMillis, pOff)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, startCal.timeInMillis, pOn)
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, endCal.timeInMillis, pOff)
+        } else {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, startCal.timeInMillis, pOn)
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, endCal.timeInMillis, pOff)
+        }
+    }
+
+    private fun cancelAlarms() {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val onIntent = Intent(this, ScheduleReceiver::class.java).apply {
+            action = ScheduleReceiver.ACTION_ON
+            setPackage(packageName)
+        }
+        val offIntent = Intent(this, ScheduleReceiver::class.java).apply {
+            action = ScheduleReceiver.ACTION_OFF
+            setPackage(packageName)
+        }
+
+        val pOn = PendingIntent.getBroadcast(this, 101, onIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE)
+        val pOff = PendingIntent.getBroadcast(this, 102, offIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE)
+
+        if (pOn != null) alarmManager.cancel(pOn)
+        if (pOff != null) alarmManager.cancel(pOff)
     }
 
     private fun checkLocationAndSyncSolar() {
@@ -309,7 +373,10 @@ class MainActivity : AppCompatActivity() {
         btnEndTime.text = String.format(Locale.getDefault(), "Off: %02d:%02d", offHour, offMin)
 
         tvSolarInfo.text = "Synced: Sunset ${timeFormat.format(Date(solar.sunsetMillis))}, Sunrise ${timeFormat.format(Date(solar.sunriseMillis))}"
-        if (switchSolar.isChecked) scheduleAlarms()
+        if (switchSolar.isChecked) {
+            scheduleAlarms()
+            Toast.makeText(this, "Solar schedule applied", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
