@@ -1,10 +1,12 @@
 package com.example.screenatnight
 
+import android.Manifest
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.app.TimePickerDialog
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.net.Uri
@@ -14,6 +16,7 @@ import android.provider.Settings
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.materialswitch.MaterialSwitch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -24,17 +27,28 @@ class MainActivity : AppCompatActivity() {
     private lateinit var seekBarOpacity: SeekBar
     private lateinit var tvOpacityLabel: TextView
     private lateinit var switchSchedule: MaterialSwitch
-    private lateinit var btnStartTime: Button
-    private lateinit var btnEndTime: Button
+    private lateinit var btnStartTime: MaterialButton
+    private lateinit var btnEndTime: MaterialButton
     private lateinit var switchSolar: MaterialSwitch
     private lateinit var spinnerCities: Spinner
     private lateinit var etSunsetOffset: EditText
     private lateinit var etSunriseOffset: EditText
-    private lateinit var btnSyncSolar: Button
+    private lateinit var btnSyncSolar: MaterialButton
     private lateinit var tvSolarInfo: TextView
+    private lateinit var tvFooterBranding: TextView
 
     private val prefs by lazy { getSharedPreferences("screen_at_night_prefs", Context.MODE_PRIVATE) }
     private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+
+    private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "opacity") {
+            val updated = prefs.getInt("opacity", 40)
+            seekBarOpacity.progress = updated
+            tvOpacityLabel.text = "Darkness Level: $updated%"
+        } else if (key == "is_active") {
+            switchOverlay.isChecked = prefs.getBoolean("is_active", false)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,6 +57,21 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         loadPreferences()
         setupListeners()
+        requestNotificationPermission()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+        switchOverlay.isChecked = prefs.getBoolean("is_active", false)
+        val op = prefs.getInt("opacity", 40)
+        seekBarOpacity.progress = op
+        tvOpacityLabel.text = "Darkness Level: $op%"
+    }
+
+    override fun onPause() {
+        super.onPause()
+        prefs.unregisterOnSharedPreferenceChangeListener(prefChangeListener)
     }
 
     private fun bindViews() {
@@ -58,6 +87,7 @@ class MainActivity : AppCompatActivity() {
         etSunriseOffset = findViewById(R.id.etSunriseOffset)
         btnSyncSolar = findViewById(R.id.btnSyncSolar)
         tvSolarInfo = findViewById(R.id.tvSolarInfo)
+        tvFooterBranding = findViewById(R.id.tvFooterBranding)
 
         val cityNames = CityDatabase.CITIES.map { it.name }
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, cityNames)
@@ -80,8 +110,8 @@ class MainActivity : AppCompatActivity() {
         val endHour = prefs.getInt("end_hour", 6)
         val endMin = prefs.getInt("end_min", 0)
 
-        btnStartTime.text = String.format(Locale.getDefault(), "Turn On: %02d:%02d", startHour, startMin)
-        btnEndTime.text = String.format(Locale.getDefault(), "Turn Off: %02d:%02d", endHour, endMin)
+        btnStartTime.text = String.format(Locale.getDefault(), "On: %02d:%02d", startHour, startMin)
+        btnEndTime.text = String.format(Locale.getDefault(), "Off: %02d:%02d", endHour, endMin)
 
         etSunsetOffset.setText(prefs.getInt("sunset_offset", 0).toString())
         etSunriseOffset.setText(prefs.getInt("sunrise_offset", 0).toString())
@@ -104,13 +134,15 @@ class MainActivity : AppCompatActivity() {
         seekBarOpacity.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 tvOpacityLabel.text = "Darkness Level: $progress%"
-                prefs.edit().putInt("opacity", progress).apply()
-                if (switchOverlay.isChecked) {
-                    val intent = Intent(this@MainActivity, OverlayService::class.java).apply {
-                        action = OverlayService.ACTION_SET_OPACITY
-                        putExtra(OverlayService.EXTRA_OPACITY, progress)
+                if (fromUser) {
+                    prefs.edit().putInt("opacity", progress).apply()
+                    if (switchOverlay.isChecked) {
+                        val intent = Intent(this@MainActivity, OverlayService::class.java).apply {
+                            action = OverlayService.ACTION_SET_OPACITY
+                            putExtra(OverlayService.EXTRA_OPACITY, progress)
+                        }
+                        startService(intent)
                     }
-                    startService(intent)
                 }
             }
             override fun onStartTrackingTouch(sb: SeekBar?) {}
@@ -131,6 +163,19 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnSyncSolar.setOnClickListener { checkLocationAndSyncSolar() }
+
+        tvFooterBranding.setOnClickListener {
+            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://itwebsolutions.ca"))
+            startActivity(browserIntent)
+        }
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 300)
+            }
+        }
     }
 
     private fun checkOverlayPermission(): Boolean {
@@ -171,10 +216,10 @@ class MainActivity : AppCompatActivity() {
         TimePickerDialog(this, { _, h, m ->
             val label = String.format(Locale.getDefault(), "%02d:%02d", h, m)
             if (isStart) {
-                btnStartTime.text = "Turn On: $label"
+                btnStartTime.text = "On: $label"
                 prefs.edit().putInt("start_hour", h).putInt("start_min", m).apply()
             } else {
-                btnEndTime.text = "Turn Off: $label"
+                btnEndTime.text = "Off: $label"
                 prefs.edit().putInt("end_hour", h).putInt("end_min", m).apply()
             }
             if (switchSchedule.isChecked || switchSolar.isChecked) scheduleAlarms()
@@ -213,8 +258,8 @@ class MainActivity : AppCompatActivity() {
         prefs.edit().putInt("selected_city_index", selectedIndex).apply()
 
         if (selectedIndex == 0) {
-            if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.ACCESS_COARSE_LOCATION), 200)
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION), 200)
                 return
             }
             val locManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
@@ -260,8 +305,8 @@ class MainActivity : AppCompatActivity() {
             .putInt("end_min", offMin)
             .apply()
 
-        btnStartTime.text = String.format(Locale.getDefault(), "Turn On: %02d:%02d", onHour, onMin)
-        btnEndTime.text = String.format(Locale.getDefault(), "Turn Off: %02d:%02d", offHour, offMin)
+        btnStartTime.text = String.format(Locale.getDefault(), "On: %02d:%02d", onHour, onMin)
+        btnEndTime.text = String.format(Locale.getDefault(), "Off: %02d:%02d", offHour, offMin)
 
         tvSolarInfo.text = "Synced: Sunset ${timeFormat.format(Date(solar.sunsetMillis))}, Sunrise ${timeFormat.format(Date(solar.sunriseMillis))}"
         if (switchSolar.isChecked) scheduleAlarms()
