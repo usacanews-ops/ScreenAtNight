@@ -1,4 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    
+    <!-- Deep Theme Colors -->
+    <color name="bg_dark">#121316</color>
+    <color name="surface_card">#1E2024</color>
+    <color name="surface_card_stroke">#2D3139</color>
+    <color name="accent_night">#82AAFF</color>
+    <color name="accent_sunset">#FFB86C</color>
+    <color name="text_primary">#F1F3F5</color>
+    <color name="text_secondary">#9DA5B4</color>
+    <color name="footer_accent">#8BE9FD</color>
 </resources>
