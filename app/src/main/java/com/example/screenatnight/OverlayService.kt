@@ -46,6 +46,14 @@ class OverlayService : Service() {
 
         updateColor(currentOpacity)
 
+        // Force view to lay out under status bar and navigation bar
+        @Suppress("DEPRECATION")
+        overlayView?.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        )
+
         val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
@@ -53,17 +61,24 @@ class OverlayService : Service() {
             WindowManager.LayoutParams.TYPE_SYSTEM_OVERLAY
         }
 
+        val flags = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS
+
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             layoutFlag,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            flags,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            // Extend through display cutouts (camera notches / punch holes) on Android 9+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
         }
 
         windowManager?.addView(overlayView, params)
@@ -114,7 +129,6 @@ class OverlayService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // PendingIntent for swiping away the notification or tapping cancel
         val stopIntent = Intent(this, OverlayService::class.java).apply {
             action = ACTION_STOP_SERVICE
         }
@@ -123,7 +137,6 @@ class OverlayService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Action: Increase darkness (+5%)
         val incIntent = Intent(this, OverlayService::class.java).apply {
             action = ACTION_INCREASE_OPACITY
         }
@@ -132,7 +145,6 @@ class OverlayService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Action: Decrease darkness (-5%)
         val decIntent = Intent(this, OverlayService::class.java).apply {
             action = ACTION_DECREASE_OPACITY
         }
@@ -146,8 +158,8 @@ class OverlayService : Service() {
             .setContentText("Swipe away or tap 'Off' to exit dimmer")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentIntent(pLaunch)
-            .setDeleteIntent(pStop) // Swiping away cancels and stops the dimmer
-            .setOngoing(false)      // Allows user to swipe away/dismiss the notification
+            .setDeleteIntent(pStop)
+            .setOngoing(false)
             .addAction(android.R.drawable.ic_input_add, "+ Dark", pInc)
             .addAction(android.R.drawable.ic_delete, "- Light", pDec)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Off", pStop)
