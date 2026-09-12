@@ -16,9 +16,13 @@ class OverlayService : Service() {
 
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
+    private var currentOpacity: Int = 40
 
     companion object {
         const val ACTION_SET_OPACITY = "ACTION_SET_OPACITY"
+        const val ACTION_INCREASE_OPACITY = "ACTION_INCREASE_OPACITY"
+        const val ACTION_DECREASE_OPACITY = "ACTION_DECREASE_OPACITY"
+        const val ACTION_STOP_SERVICE = "ACTION_STOP_SERVICE"
         const val EXTRA_OPACITY = "EXTRA_OPACITY"
         const val CHANNEL_ID = "screen_at_night_service"
         const val NOTIF_ID = 1001
@@ -28,8 +32,11 @@ class OverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        val prefs = getSharedPreferences("screen_at_night_prefs", Context.MODE_PRIVATE)
+        currentOpacity = prefs.getInt("opacity", 40)
+        
         createNotificationChannel()
-        startForeground(NOTIF_ID, buildNotification())
+        startForeground(NOTIF_ID, buildInteractiveNotification(currentOpacity))
         initOverlay()
     }
 
@@ -37,9 +44,7 @@ class OverlayService : Service() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         overlayView = View(this)
 
-        val prefs = getSharedPreferences("screen_at_night_prefs", Context.MODE_PRIVATE)
-        val alpha = prefs.getInt("opacity", 40)
-        updateColor(alpha)
+        updateColor(currentOpacity)
 
         val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -65,11 +70,35 @@ class OverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_SET_OPACITY) {
-            val alpha = intent.getIntExtra(EXTRA_OPACITY, 40)
-            updateColor(alpha)
+        when (intent?.action) {
+            ACTION_STOP_SERVICE -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_SET_OPACITY -> {
+                val alpha = intent.getIntExtra(EXTRA_OPACITY, currentOpacity)
+                applyNewOpacity(alpha)
+            }
+            ACTION_INCREASE_OPACITY -> {
+                applyNewOpacity(currentOpacity + 5)
+            }
+            ACTION_DECREASE_OPACITY -> {
+                applyNewOpacity(currentOpacity - 5)
+            }
         }
         return START_STICKY
+    }
+
+    private fun applyNewOpacity(newVal: Int) {
+        currentOpacity = newVal.coerceIn(0, 92)
+        updateColor(currentOpacity)
+        getSharedPreferences("screen_at_night_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putInt("opacity", currentOpacity)
+            .apply()
+
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        notificationManager?.notify(NOTIF_ID, buildInteractiveNotification(currentOpacity))
     }
 
     private fun updateColor(opacityPercent: Int) {
@@ -78,19 +107,50 @@ class OverlayService : Service() {
         overlayView?.setBackgroundColor(Color.argb(alphaValue, 0, 0, 0))
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildInteractiveNotification(level: Int): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
+        val pLaunch = PendingIntent.getActivity(
             this, 0, launchIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        // PendingIntent for swiping away the notification or tapping cancel
+        val stopIntent = Intent(this, OverlayService::class.java).apply {
+            action = ACTION_STOP_SERVICE
+        }
+        val pStop = PendingIntent.getService(
+            this, 1, stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        // Action: Increase darkness (+5%)
+        val incIntent = Intent(this, OverlayService::class.java).apply {
+            action = ACTION_INCREASE_OPACITY
+        }
+        val pInc = PendingIntent.getService(
+            this, 2, incIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        // Action: Decrease darkness (-5%)
+        val decIntent = Intent(this, OverlayService::class.java).apply {
+            action = ACTION_DECREASE_OPACITY
+        }
+        val pDec = PendingIntent.getService(
+            this, 3, decIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("ScreenAtNight Active")
-            .setContentText("Screen dimming overlay is running")
+            .setContentTitle("ScreenAtNight Active ($level%)")
+            .setContentText("Swipe away or tap 'Off' to exit dimmer")
             .setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
+            .setContentIntent(pLaunch)
+            .setDeleteIntent(pStop) // Swiping away cancels and stops the dimmer
+            .setOngoing(false)      // Allows user to swipe away/dismiss the notification
+            .addAction(android.R.drawable.ic_input_add, "+ Dark", pInc)
+            .addAction(android.R.drawable.ic_delete, "- Light", pDec)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Off", pStop)
             .build()
     }
 
@@ -98,9 +158,11 @@ class OverlayService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "ScreenAtNight Overlay Service",
+                "ScreenAtNight Controls",
                 NotificationManager.IMPORTANCE_LOW
-            )
+            ).apply {
+                description = "Screen dimmer controls and toggles"
+            }
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)
         }
@@ -112,5 +174,7 @@ class OverlayService : Service() {
             windowManager?.removeView(overlayView)
             overlayView = null
         }
+        val prefs = getSharedPreferences("screen_at_night_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("is_active", false).apply()
     }
 }
