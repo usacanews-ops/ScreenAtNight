@@ -19,8 +19,9 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
       - name: Setup Gradle 8.5
         uses: gradle/actions/setup-gradle@v3
@@ -35,3 +36,4 @@ jobs:
         with:
           name: ScreenAtNight-Debug-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+          
