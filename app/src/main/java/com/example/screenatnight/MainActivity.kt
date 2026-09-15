@@ -41,12 +41,18 @@ class MainActivity : AppCompatActivity() {
     private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
 
     private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == "opacity") {
-            val updated = prefs.getInt("opacity", 40)
-            seekBarOpacity.progress = updated
-            tvOpacityLabel.text = "Darkness Level: $updated%"
-        } else if (key == "is_active") {
-            switchOverlay.isChecked = prefs.getBoolean("is_active", false)
+        when (key) {
+            "opacity" -> {
+                val updated = prefs.getInt("opacity", 40)
+                seekBarOpacity.progress = updated
+                tvOpacityLabel.text = "Darkness Level: $updated%"
+            }
+            "is_active" -> {
+                switchOverlay.isChecked = prefs.getBoolean("is_active", false)
+            }
+            "start_hour", "start_min", "end_hour", "end_min" -> {
+                updateTimeButtonsDisplay()
+            }
         }
     }
 
@@ -68,6 +74,7 @@ class MainActivity : AppCompatActivity() {
         val op = prefs.getInt("opacity", 40)
         seekBarOpacity.progress = op
         tvOpacityLabel.text = "Darkness Level: $op%"
+        updateTimeButtonsDisplay()
     }
 
     override fun onPause() {
@@ -106,6 +113,18 @@ class MainActivity : AppCompatActivity() {
         val savedCityIndex = prefs.getInt("selected_city_index", 1)
         spinnerCities.setSelection(savedCityIndex)
 
+        etSunsetOffset.setText(prefs.getInt("sunset_offset", 0).toString())
+        etSunriseOffset.setText(prefs.getInt("sunrise_offset", 0).toString())
+
+        updateTimeButtonsDisplay()
+
+        val savedInfo = prefs.getString("last_solar_info", null)
+        if (!savedInfo.isNullOrEmpty()) {
+            tvSolarInfo.text = savedInfo
+        }
+    }
+
+    private fun updateTimeButtonsDisplay() {
         val startHour = prefs.getInt("start_hour", 22)
         val startMin = prefs.getInt("start_min", 0)
         val endHour = prefs.getInt("end_hour", 6)
@@ -113,9 +132,6 @@ class MainActivity : AppCompatActivity() {
 
         btnStartTime.text = String.format(Locale.getDefault(), "On: %02d:%02d", startHour, startMin)
         btnEndTime.text = String.format(Locale.getDefault(), "Off: %02d:%02d", endHour, endMin)
-
-        etSunsetOffset.setText(prefs.getInt("sunset_offset", 0).toString())
-        etSunriseOffset.setText(prefs.getInt("sunrise_offset", 0).toString())
     }
 
     private fun setupListeners() {
@@ -159,7 +175,8 @@ class MainActivity : AppCompatActivity() {
                 switchSolar.isChecked = false
                 prefs.edit().putBoolean("solar_enabled", false).apply()
                 scheduleAlarms()
-                Toast.makeText(this, "Schedule activated", Toast.LENGTH_SHORT).show()
+                evaluateCurrentState()
+                Toast.makeText(this, "Fixed schedule enabled", Toast.LENGTH_SHORT).show()
             } else {
                 if (!switchSolar.isChecked) cancelAlarms()
             }
@@ -181,6 +198,37 @@ class MainActivity : AppCompatActivity() {
         tvFooterBranding.setOnClickListener {
             val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://itwebsolutions.ca"))
             startActivity(browserIntent)
+        }
+    }
+
+    /**
+     * Resolves Issue 1: Checks if current time is inside the scheduled window right now.
+     * Supports both same-day (e.g., 14:00 to 17:00) and overnight (e.g., 22:30 to 05:30) ranges.
+     */
+    private fun evaluateCurrentState() {
+        val startHour = prefs.getInt("start_hour", 22)
+        val startMin = prefs.getInt("start_min", 0)
+        val endHour = prefs.getInt("end_hour", 6)
+        val endMin = prefs.getInt("end_min", 0)
+
+        val now = Calendar.getInstance()
+        val currentMinutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+        val startMinutes = startHour * 60 + startMin
+        val endMinutes = endHour * 60 + endMin
+
+        val isInsideWindow = if (startMinutes <= endMinutes) {
+            // Same day window
+            currentMinutes in startMinutes until endMinutes
+        } else {
+            // Overnight window spanning past midnight (e.g., 22:30 to 05:30)
+            currentMinutes >= startMinutes || currentMinutes < endMinutes
+        }
+
+        if (isInsideWindow) {
+            if (!switchOverlay.isChecked && checkOverlayPermission()) {
+                startOverlayService()
+                switchOverlay.isChecked = true
+            }
         }
     }
 
@@ -246,15 +294,16 @@ class MainActivity : AppCompatActivity() {
         val currentMin = if (isStart) prefs.getInt("start_min", 0) else prefs.getInt("end_min", 0)
 
         TimePickerDialog(this, { _, h, m ->
-            val label = String.format(Locale.getDefault(), "%02d:%02d", h, m)
             if (isStart) {
-                btnStartTime.text = "On: $label"
                 prefs.edit().putInt("start_hour", h).putInt("start_min", m).apply()
             } else {
-                btnEndTime.text = "Off: $label"
                 prefs.edit().putInt("end_hour", h).putInt("end_min", m).apply()
             }
-            if (switchSchedule.isChecked || switchSolar.isChecked) scheduleAlarms()
+            updateTimeButtonsDisplay()
+            if (switchSchedule.isChecked || switchSolar.isChecked) {
+                scheduleAlarms()
+                evaluateCurrentState()
+            }
         }, currentHour, currentMin, true).show()
     }
 
@@ -339,11 +388,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Resolves Issue 2: Calculates solar times, stores coordinates for midnight updates,
+     * updates the UI to show exact active schedule and offsets.
+     */
     private fun applySolarTimes(lat: Double, lng: Double) {
         val sunsetOffset = etSunsetOffset.text.toString().toIntOrNull() ?: 0
         val sunriseOffset = etSunriseOffset.text.toString().toIntOrNull() ?: 0
 
         prefs.edit()
+            .putFloat("solar_lat", lat.toFloat())
+            .putFloat("solar_lng", lng.toFloat())
             .putInt("sunset_offset", sunsetOffset)
             .putInt("sunrise_offset", sunriseOffset)
             .apply()
@@ -369,13 +424,52 @@ class MainActivity : AppCompatActivity() {
             .putInt("end_min", offMin)
             .apply()
 
-        btnStartTime.text = String.format(Locale.getDefault(), "On: %02d:%02d", onHour, onMin)
-        btnEndTime.text = String.format(Locale.getDefault(), "Off: %02d:%02d", offHour, offMin)
+        updateTimeButtonsDisplay()
 
-        tvSolarInfo.text = "Synced: Sunset ${timeFormat.format(Date(solar.sunsetMillis))}, Sunrise ${timeFormat.format(Date(solar.sunriseMillis))}"
+        val rawSunset = timeFormat.format(Date(solar.sunsetMillis))
+        val rawSunrise = timeFormat.format(Date(solar.sunriseMillis))
+        val scheduledOn = String.format(Locale.getDefault(), "%02d:%02d", onHour, onMin)
+        val scheduledOff = String.format(Locale.getDefault(), "%02d:%02d", offHour, offMin)
+
+        val infoString = "Sun: Sunset $rawSunset, Sunrise $rawSunrise\nEffective Schedule: On at $scheduledOn, Off at $scheduledOff"
+        tvSolarInfo.text = infoString
+        prefs.edit().putString("last_solar_info", infoString).apply()
+
+        scheduleDailyMidnightCheck()
+
         if (switchSolar.isChecked) {
             scheduleAlarms()
-            Toast.makeText(this, "Solar schedule applied", Toast.LENGTH_SHORT).show()
+            evaluateCurrentState()
+            Toast.makeText(this, "Solar schedule applied & synced", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun scheduleDailyMidnightCheck() {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val midnight = Calendar.getInstance().apply {
+            add(Calendar.DATE, 1)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 1)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        val intent = Intent(this, ScheduleReceiver::class.java).apply {
+            action = ScheduleReceiver.ACTION_RECALCULATE_SOLAR
+            setPackage(packageName)
+        }
+
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            103,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, midnight.timeInMillis, pendingIntent)
+        } else {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, midnight.timeInMillis, pendingIntent)
         }
     }
 
