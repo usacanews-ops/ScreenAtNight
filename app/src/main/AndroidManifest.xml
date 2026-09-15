@@ -11,7 +11,7 @@
     <!-- Android 13+ Notification Permission -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     
-    <!-- Scheduler permissions (USE_EXACT_ALARM prevents OS from dropping alarms on API 33+) -->
+    <!-- Scheduler permissions -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
@@ -50,6 +50,7 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="com.example.screenatnight.ACTION_TRIGGER_ON" />
                 <action android:name="com.example.screenatnight.ACTION_TRIGGER_OFF" />
+                <action android:name="com.example.screenatnight.ACTION_RECALCULATE_SOLAR" />
             </intent-filter>
         </receiver>
 
