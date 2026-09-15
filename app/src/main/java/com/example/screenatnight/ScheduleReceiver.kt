@@ -13,6 +13,7 @@ class ScheduleReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_ON = "com.example.screenatnight.ACTION_TRIGGER_ON"
         const val ACTION_OFF = "com.example.screenatnight.ACTION_TRIGGER_OFF"
+        const val ACTION_RECALCULATE_SOLAR = "com.example.screenatnight.ACTION_RECALCULATE_SOLAR"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -40,7 +41,6 @@ class ScheduleReceiver : BroadcastReceiver() {
                     e.printStackTrace()
                 }
 
-                // Automatically reschedule for the next day
                 if (isScheduleEnabled || isSolarEnabled) {
                     rescheduleNextDay(context, isTurnOn = true)
                 }
@@ -53,15 +53,44 @@ class ScheduleReceiver : BroadcastReceiver() {
                 }
                 context.stopService(serviceIntent)
 
-                // Automatically reschedule for the next day
                 if (isScheduleEnabled || isSolarEnabled) {
                     rescheduleNextDay(context, isTurnOn = false)
+                }
+            }
+
+            ACTION_RECALCULATE_SOLAR -> {
+                // Runs automatically every midnight to update sunrise & sunset for the current day
+                if (isSolarEnabled) {
+                    val lat = prefs.getFloat("solar_lat", 28.6139f).toDouble()
+                    val lng = prefs.getFloat("solar_lng", 77.2090f).toDouble()
+                    val sunsetOffset = prefs.getInt("sunset_offset", 0)
+                    val sunriseOffset = prefs.getInt("sunrise_offset", 0)
+
+                    val solar = SolarHelper.calculate(lat, lng)
+
+                    val turnOnTime = Calendar.getInstance().apply {
+                        timeInMillis = solar.sunsetMillis + (sunsetOffset * 60 * 1000)
+                    }
+                    val turnOffTime = Calendar.getInstance().apply {
+                        timeInMillis = solar.sunriseMillis + (sunriseOffset * 60 * 1000)
+                    }
+
+                    prefs.edit()
+                        .putInt("start_hour", turnOnTime.get(Calendar.HOUR_OF_DAY))
+                        .putInt("start_min", turnOnTime.get(Calendar.MINUTE))
+                        .putInt("end_hour", turnOffTime.get(Calendar.HOUR_OF_DAY))
+                        .putInt("end_min", turnOffTime.get(Calendar.MINUTE))
+                        .apply()
+
+                    rescheduleAllAlarms(context)
+                    scheduleDailyMidnightSync(context)
                 }
             }
 
             Intent.ACTION_BOOT_COMPLETED -> {
                 if (isScheduleEnabled || isSolarEnabled) {
                     rescheduleAllAlarms(context)
+                    if (isSolarEnabled) scheduleDailyMidnightSync(context)
                 }
             }
         }
@@ -81,7 +110,7 @@ class ScheduleReceiver : BroadcastReceiver() {
             set(Calendar.MINUTE, prefs.getInt(minKey, 0))
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
-            add(Calendar.DATE, 1) // Next day
+            add(Calendar.DATE, 1)
         }
 
         val intent = Intent(context, ScheduleReceiver::class.java).apply {
@@ -145,5 +174,34 @@ class ScheduleReceiver : BroadcastReceiver() {
 
         setAlarm(isTurnOn = true)
         setAlarm(isTurnOn = false)
+    }
+
+    private fun scheduleDailyMidnightSync(context: Context) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val midnight = Calendar.getInstance().apply {
+            add(Calendar.DATE, 1)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 1)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        val intent = Intent(context, ScheduleReceiver::class.java).apply {
+            action = ACTION_RECALCULATE_SOLAR
+            setPackage(context.packageName)
+        }
+
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            103,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, midnight.timeInMillis, pendingIntent)
+        } else {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, midnight.timeInMillis, pendingIntent)
+        }
     }
 }
